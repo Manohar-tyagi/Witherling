@@ -8,17 +8,13 @@
   let W, H;
   let mouseX = -9999, mouseY = -9999;
   let smMouseX = -9999, smMouseY = -9999;
-  let frameAnimating = false;
-  let frameAnimStart = 0;
-  let frameHoldUntil = 0;
   let isRevealed = false;
+  let tulipsHidden = false;
 
   const NUM_FLOWERS = 3500;
   const REPULSION_RADIUS = 200;
   const LERP_SPEED = 0.05;
   const FOCAL = 900;
-  const FRAME_ANIM_DURATION = 2500;
-  const FRAME_HOLD_DURATION = 7000;
   const CACHE_SIZE = 100;
 
   const typeDefs = [
@@ -56,10 +52,6 @@
     const g = Math.max(0, ((n >> 8) & 0xff) - pct);
     const b = Math.max(0, (n & 0xff) - pct);
     return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
-  }
-
-  function easeInOutCubic(t) {
-    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
   }
 
   function createCachedTulip(petal, blush, stem) {
@@ -208,41 +200,6 @@
   }
 
   let flowers = initFlowers();
-  let frameTargets = [];
-
-  function generateFrameTargets() {
-    frameTargets.length = 0;
-    const pad = 18;
-    const marg = 10;
-    const count = 875;
-
-    const rng = (i) => ((i * 7.137 + 3.571) % 1 + 1) % 1;
-
-    for (let i = 0; i < count; i++) {
-      frameTargets.push({
-        x: pad + (W - 2 * pad) * (i / (count - 1)),
-        y: marg + (rng(i * 3 + 1) - 0.5) * 10
-      });
-    }
-    for (let i = 0; i < count; i++) {
-      frameTargets.push({
-        x: pad + (W - 2 * pad) * (i / (count - 1)),
-        y: H - marg + (rng(i * 3 + 2) - 0.5) * 10
-      });
-    }
-    for (let i = 0; i < count; i++) {
-      frameTargets.push({
-        x: marg + (rng(i * 3 + 3) - 0.5) * 10,
-        y: pad + (H - 2 * pad) * ((i + 1) / (count + 1))
-      });
-    }
-    for (let i = 0; i < count; i++) {
-      frameTargets.push({
-        x: W - marg + (rng(i * 3 + 4) - 0.5) * 10,
-        y: pad + (H - 2 * pad) * ((i + 1) / (count + 1))
-      });
-    }
-  }
 
   function resize() {
     W = window.innerWidth;
@@ -254,7 +211,7 @@
   window.addEventListener('resize', resize);
 
   function updatePhysics() {
-    if (frameAnimating) return;
+    if (tulipsHidden) return;
 
     const t = Date.now() * 0.001;
 
@@ -288,48 +245,9 @@
     }
   }
 
-  function updateFrameState() {
-    if (frameAnimating) {
-      const elapsed = Date.now() - frameAnimStart;
-      const progress = Math.min(1, elapsed / FRAME_ANIM_DURATION);
-      const eased = easeInOutCubic(progress);
-
-      for (let i = 0; i < NUM_FLOWERS; i++) {
-        const f = flowers[i];
-        const t = frameTargets[i];
-        const sc = FOCAL / (FOCAL + f.z);
-        f.smoothedX = lerp(f.baseX, (t.x - W / 2) / sc, eased);
-        f.smoothedY = lerp(f.baseY, (t.y - H / 2) / sc, eased);
-      }
-
-      if (progress >= 1) {
-        frameAnimating = false;
-        frameHoldUntil = Date.now() + FRAME_HOLD_DURATION;
-        for (let i = 0; i < NUM_FLOWERS; i++) {
-          const f = flowers[i];
-          const t = frameTargets[i];
-          const sc = FOCAL / (FOCAL + f.z);
-          f.baseX = (t.x - W / 2) / sc;
-          f.baseY = (t.y - H / 2) / sc;
-          f.smoothedX = f.baseX;
-          f.smoothedY = f.baseY;
-        }
-        landing.classList.add('frame-held');
-      }
-    }
-
-    if (!frameAnimating && !isRevealed && frameHoldUntil > 0 && Date.now() >= frameHoldUntil) {
-      isRevealed = true;
-      landing.classList.remove('frame-held');
-      landing.classList.add('hidden');
-      scrollContent.classList.add('visible');
-      document.body.classList.add('scrollable');
-      setupIntersectionObserver();
-    }
-  }
-
   function render() {
     ctx.clearRect(0, 0, W, H);
+    if (tulipsHidden) return;
 
     const t = Date.now() * 0.001;
     const hc = CACHE_SIZE / 2;
@@ -380,7 +298,6 @@
     smMouseX = lerp(smMouseX, mouseX, 0.07);
     smMouseY = lerp(smMouseY, mouseY, 0.07);
     updatePhysics();
-    updateFrameState();
     render();
     requestAnimationFrame(loop);
   }
@@ -397,11 +314,15 @@
   }, { passive: true });
 
   revealBtn.addEventListener('click', function () {
-    if (frameAnimating || isRevealed) return;
+    if (tulipsHidden || isRevealed) return;
     revealBtn.style.pointerEvents = 'none';
-    generateFrameTargets();
-    frameAnimating = true;
-    frameAnimStart = Date.now();
+    tulipsHidden = true;
+    isRevealed = true;
+    landing.classList.remove('frame-held');
+    landing.classList.add('hidden');
+    scrollContent.classList.add('visible');
+    document.body.classList.add('scrollable');
+    setupIntersectionObserver();
   });
 
   let observer = null;
