@@ -26,13 +26,13 @@ let particleVelocities = [];
 let particleLife = [];
 let isParticleActive = false;
 let baseScale = 1;
-let snowParticles = null;
+let starParticles = null;
 
 const initialRotations = new Map();
 
 const FOCAL = 900;
 const NUM_FLOWERS = 3500;
-const CACHE_SIZE = 80;
+const CACHE_SIZE = 120;
 
 let W, H;
 let tulipCtx;
@@ -81,80 +81,93 @@ function createCachedTulip(petal, blush, stem) {
   const c = document.createElement('canvas');
   c.width = CACHE_SIZE;
   c.height = CACHE_SIZE;
-  const cx = c.getContext('2d');
+  const ctx = c.getContext('2d');
   const hc = CACHE_SIZE / 2;
 
-  const stemG = cx.createLinearGradient(hc - 4, hc + 4, hc + 4, hc + 4);
-  stemG.addColorStop(0, darken(stem, 20));
-  stemG.addColorStop(0.25, stem);
-  stemG.addColorStop(0.75, stem);
-  stemG.addColorStop(1, darken(stem, 20));
-  cx.beginPath();
-  cx.moveTo(hc - 3, hc + 4);
-  cx.quadraticCurveTo(hc - 1.5, hc + 8, hc, hc + 10);
-  cx.lineTo(hc + 3, hc + 10);
-  cx.quadraticCurveTo(hc + 4, hc + 8, hc + 3, hc + 4);
-  cx.closePath();
-  cx.fillStyle = stemG;
-  cx.fill();
+  function drawPetal(angle, w, h, colors, showVeins) {
+    ctx.save();
+    ctx.translate(hc, hc);
+    ctx.rotate(angle);
 
-  cx.shadowColor = 'rgba(20,20,40,0.25)';
-  cx.shadowBlur = 6;
-  cx.shadowOffsetY = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(-w, -h * 0.3, -w * 0.8, -h * 0.7);
+    ctx.quadraticCurveTo(-w * 0.35, -h * 0.95, 0, -h);
+    ctx.quadraticCurveTo(w * 0.35, -h * 0.95, w * 0.8, -h * 0.7);
+    ctx.quadraticCurveTo(w, -h * 0.3, 0, 0);
+    ctx.closePath();
 
-  const gLO = cx.createRadialGradient(hc - 16, hc - 12, 2, hc - 16, hc - 12, 28);
-  gLO.addColorStop(0, lighten(petal, 25));
-  gLO.addColorStop(0.5, petal);
-  gLO.addColorStop(1, darken(petal, 10));
-  cx.beginPath();
-  cx.moveTo(hc, hc - 2);
-  cx.bezierCurveTo(hc - 18, hc - 2, hc - 28, hc - 16, hc - 16, hc - 36);
-  cx.bezierCurveTo(hc - 10, hc - 42, hc - 3, hc - 40, hc, hc - 34);
-  cx.closePath();
-  cx.fillStyle = gLO;
-  cx.fill();
+    const g = ctx.createRadialGradient(0, -h * 0.5, 0, 0, -h * 0.5, h * 1.1);
+    g.addColorStop(0, colors[0]);
+    g.addColorStop(0.4, colors[1]);
+    g.addColorStop(1, colors[2]);
+    ctx.fillStyle = g;
+    ctx.fill();
 
-  const gRO = cx.createRadialGradient(hc + 16, hc - 12, 2, hc + 16, hc - 12, 28);
-  gRO.addColorStop(0, lighten(petal, 25));
-  gRO.addColorStop(0.5, petal);
-  gRO.addColorStop(1, darken(petal, 10));
-  cx.beginPath();
-  cx.moveTo(hc, hc - 2);
-  cx.bezierCurveTo(hc + 18, hc - 2, hc + 28, hc - 16, hc + 16, hc - 36);
-  cx.bezierCurveTo(hc + 10, hc - 42, hc + 3, hc - 40, hc, hc - 34);
-  cx.closePath();
-  cx.fillStyle = gRO;
-  cx.fill();
+    if (showVeins) {
+      ctx.strokeStyle = colors[3];
+      ctx.lineWidth = 0.6;
+      ctx.globalAlpha = 0.2;
+      for (let v = -1; v <= 1; v++) {
+        const ox = v * w * 0.35;
+        ctx.beginPath();
+        ctx.moveTo(ox * 0.15, -h * 0.05);
+        ctx.quadraticCurveTo(ox * 0.8, -h * 0.4, ox * 0.6, -h * 0.85);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
 
-  const gCB = cx.createRadialGradient(hc, hc - 16, 0, hc, hc - 16, 20);
-  gCB.addColorStop(0, lighten(petal, 18));
-  gCB.addColorStop(1, darken(petal, 6));
-  cx.beginPath();
-  cx.moveTo(hc - 6, hc - 3);
-  cx.bezierCurveTo(hc - 8, hc - 12, hc - 4, hc - 22, hc, hc - 34);
-  cx.bezierCurveTo(hc + 4, hc - 22, hc + 8, hc - 12, hc + 6, hc - 3);
-  cx.closePath();
-  cx.fillStyle = gCB;
-  cx.fill();
+    ctx.restore();
+  }
 
-  cx.shadowBlur = 0;
-  cx.shadowOffsetY = 0;
+  ctx.shadowColor = 'rgba(0,0,0,0.35)';
+  ctx.shadowBlur = 15;
+  ctx.shadowOffsetX = 2;
+  ctx.shadowOffsetY = 3;
 
-  cx.beginPath();
-  cx.moveTo(hc - 3, hc - 10);
-  cx.bezierCurveTo(hc - 4, hc - 16, hc - 1.5, hc - 22, hc, hc - 28);
-  cx.bezierCurveTo(hc + 1.5, hc - 22, hc + 4, hc - 16, hc + 3, hc - 10);
-  cx.closePath();
-  cx.fillStyle = lighten(blush, 20);
-  cx.fill();
+  const lightTip = lighten(blush, 15);
+  const midColor = petal;
+  const darkBase = darken(petal, 20);
+  const veinCol = lighten(blush, 25);
 
-  cx.beginPath();
-  cx.moveTo(hc - 5, hc - 12);
-  cx.bezierCurveTo(hc - 6, hc - 18, hc - 2.5, hc - 24, hc, hc - 30);
-  cx.bezierCurveTo(hc + 2.5, hc - 24, hc + 6, hc - 18, hc + 5, hc - 12);
-  cx.closePath();
-  cx.fillStyle = lighten(blush, 30);
-  cx.fill();
+  const outerW = hc * 0.5, outerH = hc * 0.75;
+  const midW = hc * 0.4, midH = hc * 0.6;
+  const innerW = hc * 0.3, innerH = hc * 0.45;
+
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2;
+    drawPetal(a, outerW, outerH, [lightTip, midColor, darkBase, veinCol], true);
+  }
+
+  const midLight = lighten(blush, 20);
+  const midMid = lighten(petal, 5);
+  const midDark = darken(petal, 10);
+  const midVein = lighten(blush, 30);
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2 + Math.PI / 3;
+    drawPetal(a, midW, midH, [midLight, midMid, midDark, midVein], true);
+  }
+
+  const inLight = lighten(blush, 30);
+  const inMid = lighten(blush, 10);
+  const inDark = blush;
+  for (let i = 0; i < 3; i++) {
+    const a = (i / 3) * Math.PI * 2;
+    drawPetal(a, innerW, innerH, [inLight, inMid, inDark, inLight], false);
+  }
+
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  const cGrad = ctx.createRadialGradient(hc, hc, 0, hc, hc, hc * 0.12);
+  cGrad.addColorStop(0, darken(stem, 40));
+  cGrad.addColorStop(0.6, darken(stem, 15));
+  cGrad.addColorStop(1, darken(petal, 5));
+  ctx.beginPath();
+  ctx.arc(hc, hc, hc * 0.12, 0, Math.PI * 2);
+  ctx.fillStyle = cGrad;
+  ctx.fill();
 
   return c;
 }
@@ -358,52 +371,41 @@ function initScene() {
   renderer.outputColorSpace = THREE.SRGBColorSpace;
 }
 
-function createSnowfall() {
-  const count = 600;
+function createStarfield() {
+  const count = 2500;
   const geometry = new THREE.BufferGeometry();
   const positions = new Float32Array(count * 3);
-  const velocities = new Float32Array(count);
-  const spread = 12;
-  const height = 8;
+  const colors = new Float32Array(count * 3);
+
+  const white = new THREE.Color(0xffffff);
+  const lightBlue = new THREE.Color(0xe0f2fe);
 
   for (let i = 0; i < count; i++) {
-    positions[i * 3] = (Math.random() - 0.5) * spread;
-    positions[i * 3 + 1] = Math.random() * height - 2;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * spread - 3;
-    velocities[i] = 0.15 + Math.random() * 0.25;
+    positions[i * 3] = (Math.random() - 0.5) * 40;
+    positions[i * 3 + 1] = (Math.random() - 0.5) * 20;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 40 - 5;
+
+    const c = Math.random() > 0.5 ? white : lightBlue;
+    colors[i * 3] = c.r;
+    colors[i * 3 + 1] = c.g;
+    colors[i * 3 + 2] = c.b;
   }
 
   geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geometry.userData = { velocities, spread, height, count };
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
   const material = new THREE.PointsMaterial({
-    color: 0xffffff,
-    size: 0.025,
+    size: 0.04,
+    vertexColors: true,
     transparent: true,
-    opacity: 0.35,
+    opacity: 0.9,
     blending: THREE.AdditiveBlending,
     depthWrite: false,
     sizeAttenuation: true,
   });
 
-  snowParticles = new THREE.Points(geometry, material);
-  scene.add(snowParticles);
-}
-
-function updateSnowfall(delta) {
-  if (!snowParticles) return;
-  const positions = snowParticles.geometry.attributes.position.array;
-  const { velocities, spread, height, count } = snowParticles.geometry.userData;
-
-  for (let i = 0; i < count; i++) {
-    positions[i * 3 + 1] -= velocities[i] * delta;
-    if (positions[i * 3 + 1] < -2) {
-      positions[i * 3 + 1] = height - 2;
-      positions[i * 3] = (Math.random() - 0.5) * spread;
-      positions[i * 3 + 2] = (Math.random() - 0.5) * spread - 3;
-    }
-  }
-  snowParticles.geometry.attributes.position.needsUpdate = true;
+  starParticles = new THREE.Points(geometry, material);
+  scene.add(starParticles);
 }
 
 function setupLights() {
@@ -867,7 +869,7 @@ function animate() {
   updateTulips();
   renderTulips(time);
 
-  updateSnowfall(delta);
+  if (starParticles) starParticles.rotation.y += delta * 0.02;
   animateModel();
   updateParticles(delta);
   renderer.render(scene, camera);
@@ -914,10 +916,24 @@ function completeReveal() {
 
   document.body.classList.add('scrollable');
 
+  gsap.to(camera.position, {
+    z: 4.5,
+    duration: 1.5,
+    ease: 'power2.inOut',
+  });
+
+  if (starParticles) {
+    gsap.to(starParticles.scale, {
+      x: 2.5, y: 2.5, z: 2.5,
+      duration: 1.5,
+      ease: 'power2.inOut',
+    });
+  }
+
   gsap.to(scrollContainer, {
     visibility: 'visible',
     pointerEvents: 'auto',
-    duration: 0.6,
+    duration: 1.5,
     ease: 'power2.out',
   });
 
@@ -925,13 +941,13 @@ function completeReveal() {
     setupScrollAnimation();
     setupSectionReveals();
     ScrollTrigger.refresh();
-  }, 300);
+  }, 1800);
 }
 
 async function init() {
   initTulipCanvas();
   initScene();
-  createSnowfall();
+  createStarfield();
   setupLights();
   await loadModel();
 

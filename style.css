@@ -157,7 +157,7 @@ canvas#tulipCanvas {
 #scrollContainer {
   position: relative;
   z-index: 2;
-  opacity: 0;
+  opacity: 1;
   visibility: hidden;
   pointer-events: none;
   margin-top: 100vh;
