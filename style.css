@@ -32,17 +32,6 @@ body.scrollable {
   opacity: 0.25;
 }
 
-canvas#threeCanvas {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100vw;
-  height: 100vh;
-  z-index: 1;
-  display: block;
-  pointer-events: none;
-}
-
 canvas#tulipCanvas {
   position: fixed;
   top: 0;
@@ -50,6 +39,17 @@ canvas#tulipCanvas {
   width: 100vw;
   height: 100vh;
   z-index: 10;
+  display: block;
+  pointer-events: none;
+}
+
+canvas#threeCanvas {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 1;
   display: block;
   pointer-events: none;
 }
@@ -66,7 +66,6 @@ canvas#tulipCanvas {
   justify-content: center;
   padding: 2rem;
   pointer-events: auto;
-  transition: opacity 1.5s ease;
 }
 
 #landing.hidden {
@@ -75,9 +74,9 @@ canvas#tulipCanvas {
 }
 
 .glass-card {
-  background: rgba(15, 15, 15, 0.6);
-  backdrop-filter: blur(25px);
-  -webkit-backdrop-filter: blur(25px);
+  background: rgba(15, 15, 15, 0.4) !important;
+  backdrop-filter: blur(12px) saturate(180%) !important;
+  -webkit-backdrop-filter: blur(12px) saturate(180%) !important;
   border: 1px solid rgba(232, 221, 208, 0.12);
   border-radius: 20px;
   padding: 3.5rem 4rem;

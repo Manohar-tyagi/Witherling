@@ -32,57 +32,33 @@ const initialRotations = new Map();
 
 const FOCAL = 900;
 const NUM_FLOWERS = 3500;
-const CACHE_SIZE = 120;
-
-let W, H;
-let tulipCtx;
-let cachedTypes = [];
+const SPRITE_SIZE = 120;
+const COLOR_PALETTES = [
+  { o: ['#8B2A2A','#6B1A1A','#4A0E0E','#A84A4A'], m: ['#A84A4A','#8B2A2A','#6B1A1A','#C86A6A'], i: ['#C86A6A','#A84A4A','#8B2A2A','#E08A8A'], c: ['#1A0808','#2A0E0E','#3A1414'] },
+  { o: ['#D4A0B0','#C08090','#A06070','#E0C0D0'], m: ['#E0C0D0','#D4A0B0','#C08090','#F0D8E0'], i: ['#F0D8E0','#E0C0D0','#D4A0B0','#FFF0F5'], c: ['#1A0810','#2A1020','#3A1830'] },
+  { o: ['#8B7AB0','#6B5A90','#4A3A70','#A89AC8'], m: ['#A89AC8','#8B7AB0','#6B5A90','#C8BAD8'], i: ['#C8BAD8','#A89AC8','#8B7AB0','#E0D8F0'], c: ['#0E0815','#1A1028','#2A1A3A'] },
+  { o: ['#2A4A7A','#1A3A6A','#0E2A4A','#4A6A9A'], m: ['#4A6A9A','#2A4A7A','#1A3A6A','#6A8ABA'], i: ['#6A8ABA','#4A6A9A','#2A4A7A','#8AAADA'], c: ['#060E1A','#0E1A2A','#16283A'] },
+  { o: ['#D8D0C0','#C8C0B0','#B0A898','#E8E0D0'], m: ['#E8E0D0','#D8D0C0','#C8C0B0','#F0ECE0'], i: ['#F0ECE0','#E8E0D0','#D8D0C0','#FFF8F0'], c: ['#0E0E0A','#1A1A14','#2A2820'] },
+];
+let flowerSprites = [];
 let flowers = [];
+let tulipsHidden = false;
 let explosionActive = false;
 let explosionProgress = 0;
 let explosionTween = null;
-let tulipsHidden = false;
+let W, H, tulipCtx;
 
 let mouseX = -9999, mouseY = -9999;
 let smMouseX = -9999, smMouseY = -9999;
 
-const typeDefs = [
-  { p: '#3B3B6B', b: '#4A4A7A', s: '#2A2A4A' },
-  { p: '#4A4A7A', b: '#5A5A8A', s: '#3A3A5A' },
-  { p: '#5C2E5C', b: '#6B3A6B', s: '#4A1E4A' },
-  { p: '#6B3A6B', b: '#7A4A7A', s: '#5A2A5A' },
-  { p: '#1E3E62', b: '#2A4A72', s: '#162E4A' },
-  { p: '#2A4A72', b: '#3A5A82', s: '#1E3A5A' },
-  { p: '#6A6A7A', b: '#7A7A8A', s: '#5A5A6A' },
-  { p: '#7A7A8A', b: '#8A8A9A', s: '#6A6A7A' },
-  { p: '#2A1E3A', b: '#3A2E4A', s: '#1E162A' },
-  { p: '#3A2E4A', b: '#4A3E5A', s: '#2A1E3A' },
-];
-
 function lerp(a, b, t) { return a + (b - a) * t; }
 
-function lighten(hex, pct) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = Math.min(255, (n >> 16) + pct);
-  const g = Math.min(255, ((n >> 8) & 0xff) + pct);
-  const b = Math.min(255, (n & 0xff) + pct);
-  return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
-}
-
-function darken(hex, pct) {
-  const n = parseInt(hex.slice(1), 16);
-  const r = Math.max(0, (n >> 16) - pct);
-  const g = Math.max(0, ((n >> 8) & 0xff) - pct);
-  const b = Math.max(0, (n & 0xff) - pct);
-  return '#' + ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1);
-}
-
-function createCachedTulip(petal, blush, stem) {
+function createTulipSprite(palette) {
   const c = document.createElement('canvas');
-  c.width = CACHE_SIZE;
-  c.height = CACHE_SIZE;
+  c.width = SPRITE_SIZE;
+  c.height = SPRITE_SIZE;
   const ctx = c.getContext('2d');
-  const hc = CACHE_SIZE / 2;
+  const hc = SPRITE_SIZE / 2;
 
   function drawPetal(angle, w, h, colors, showVeins) {
     ctx.save();
@@ -106,13 +82,13 @@ function createCachedTulip(petal, blush, stem) {
 
     if (showVeins) {
       ctx.strokeStyle = colors[3];
-      ctx.lineWidth = 0.6;
-      ctx.globalAlpha = 0.2;
+      ctx.lineWidth = 0.5;
+      ctx.globalAlpha = 0.15;
       for (let v = -1; v <= 1; v++) {
         const ox = v * w * 0.35;
         ctx.beginPath();
-        ctx.moveTo(ox * 0.15, -h * 0.05);
-        ctx.quadraticCurveTo(ox * 0.8, -h * 0.4, ox * 0.6, -h * 0.85);
+        ctx.moveTo(ox * 0.1, -h * 0.05);
+        ctx.quadraticCurveTo(ox * 0.7, -h * 0.4, ox * 0.5, -h * 0.8);
         ctx.stroke();
       }
       ctx.globalAlpha = 1;
@@ -126,54 +102,37 @@ function createCachedTulip(petal, blush, stem) {
   ctx.shadowOffsetX = 2;
   ctx.shadowOffsetY = 3;
 
-  const lightTip = lighten(blush, 15);
-  const midColor = petal;
-  const darkBase = darken(petal, 20);
-  const veinCol = lighten(blush, 25);
-
-  const outerW = hc * 0.5, outerH = hc * 0.75;
-  const midW = hc * 0.4, midH = hc * 0.6;
-  const innerW = hc * 0.3, innerH = hc * 0.45;
+  const outerW = hc * 0.52, outerH = hc * 0.78;
+  const midW = hc * 0.42, midH = hc * 0.62;
+  const innerW = hc * 0.32, innerH = hc * 0.46;
 
   for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2;
-    drawPetal(a, outerW, outerH, [lightTip, midColor, darkBase, veinCol], true);
+    drawPetal(i / 3 * Math.PI * 2, outerW, outerH, palette.o, true);
   }
-
-  const midLight = lighten(blush, 20);
-  const midMid = lighten(petal, 5);
-  const midDark = darken(petal, 10);
-  const midVein = lighten(blush, 30);
   for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2 + Math.PI / 3;
-    drawPetal(a, midW, midH, [midLight, midMid, midDark, midVein], true);
+    drawPetal(i / 3 * Math.PI * 2 + Math.PI / 3, midW, midH, palette.m, true);
   }
-
-  const inLight = lighten(blush, 30);
-  const inMid = lighten(blush, 10);
-  const inDark = blush;
   for (let i = 0; i < 3; i++) {
-    const a = (i / 3) * Math.PI * 2;
-    drawPetal(a, innerW, innerH, [inLight, inMid, inDark, inLight], false);
+    drawPetal(i / 3 * Math.PI * 2, innerW, innerH, palette.i, false);
   }
 
   ctx.shadowBlur = 0;
   ctx.shadowOffsetX = 0;
   ctx.shadowOffsetY = 0;
-  const cGrad = ctx.createRadialGradient(hc, hc, 0, hc, hc, hc * 0.12);
-  cGrad.addColorStop(0, darken(stem, 40));
-  cGrad.addColorStop(0.6, darken(stem, 15));
-  cGrad.addColorStop(1, darken(petal, 5));
+  const cGrad = ctx.createRadialGradient(hc, hc, 0, hc, hc, hc * 0.13);
+  cGrad.addColorStop(0, palette.c[0]);
+  cGrad.addColorStop(0.6, palette.c[1]);
+  cGrad.addColorStop(1, palette.c[2]);
   ctx.beginPath();
-  ctx.arc(hc, hc, hc * 0.12, 0, Math.PI * 2);
+  ctx.arc(hc, hc, hc * 0.13, 0, Math.PI * 2);
   ctx.fillStyle = cGrad;
   ctx.fill();
 
   return c;
 }
 
-function initTulipCanvas() {
-  cachedTypes = typeDefs.map(t => createCachedTulip(t.p, t.b, t.s));
+function initFlowers() {
+  flowerSprites = COLOR_PALETTES.map(p => createTulipSprite(p));
   W = window.innerWidth;
   H = window.innerHeight;
   tulipCanvas.width = W;
@@ -187,25 +146,25 @@ function initTulipCanvas() {
       baseY: (Math.random() - 0.5) * 1200,
       z: Math.random() * 600 - 100,
       smoothedX: 0, smoothedY: 0,
-      typeIdx: Math.floor(Math.random() * typeDefs.length),
       size: 0.5 + Math.random() * 0.9,
       baseRotation: (Math.random() - 0.5) * 0.12,
       swaySpeed: 0.2 + Math.random() * 0.4,
       swayPhase: Math.random() * Math.PI * 2,
       swayAmount: 0.01 + Math.random() * 0.03,
       swayAmp: 1.5 + Math.random() * 2.5,
-      exitVx: 0, exitVy: 0, exitVz: 0,
+      spriteIdx: Math.floor(Math.random() * COLOR_PALETTES.length),
+      exitVx: 0, exitVy: 0,
     });
   }
 }
 
-function renderTulips(time) {
+function renderFlowers(time) {
   if (tulipsHidden) {
     tulipCtx.clearRect(0, 0, W, H);
     return;
   }
 
-  const hc = CACHE_SIZE / 2;
+  const hc = SPRITE_SIZE / 2;
   const hw = W / 2;
   const hh = H / 2;
 
@@ -222,7 +181,7 @@ function renderTulips(time) {
       const screenY = sy + f.exitVy * ep * ep * 1.2;
       const sc2 = sc * f.size;
       if (sc2 < 0.01) continue;
-      if (screenX < -hc || screenX > W + hc || screenY < -hc || screenY > H + hc) continue;
+      if (screenX < -SPRITE_SIZE || screenX > W + SPRITE_SIZE || screenY < -SPRITE_SIZE || screenY > H + SPRITE_SIZE) continue;
 
       const swayRot = Math.sin(time * f.swaySpeed + f.swayPhase) * f.swayAmount;
       const rot = f.baseRotation + swayRot;
@@ -233,7 +192,7 @@ function renderTulips(time) {
       const c = -sc2 * sin;
       const d = sc2 * cos;
       tulipCtx.setTransform(a, b, c, d, screenX, screenY);
-      tulipCtx.drawImage(cachedTypes[f.typeIdx], -hc, -hc);
+      tulipCtx.drawImage(flowerSprites[f.spriteIdx], -hc, -hc);
     }
     tulipCtx.setTransform(1, 0, 0, 1, 0, 0);
     return;
@@ -255,7 +214,7 @@ function renderTulips(time) {
   }
 
   for (let i = 0; i < NUM_FLOWERS; i++) {
-    if (scArr[i] >= 0.012 && sxArr[i] > -hc && sxArr[i] < W + hc && syArr[i] > -hc && syArr[i] < H + hc) {
+    if (scArr[i] >= 0.012 && sxArr[i] > -SPRITE_SIZE && sxArr[i] < W + SPRITE_SIZE && syArr[i] > -SPRITE_SIZE && syArr[i] < H + SPRITE_SIZE) {
       visible.push(i);
     }
   }
@@ -275,45 +234,12 @@ function renderTulips(time) {
     const c = -sc * sin;
     const d = sc * cos;
     tulipCtx.setTransform(a, b, c, d, sxArr[i], syArr[i]);
-    tulipCtx.drawImage(cachedTypes[f.typeIdx], -hc, -hc);
+    tulipCtx.drawImage(flowerSprites[f.spriteIdx], -hc, -hc);
   }
   tulipCtx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
-function startExplosion() {
-  explosionActive = true;
-  explosionProgress = 0;
-
-  const t = Date.now() * 0.001;
-  for (let i = 0; i < NUM_FLOWERS; i++) {
-    const f = flowers[i];
-    const angle = Math.atan2(f.baseY, f.baseX) + (Math.random() - 0.5) * 0.4;
-    const speed = 600 + Math.random() * 1000;
-    f.exitVx = Math.cos(angle) * speed;
-    f.exitVy = Math.sin(angle) * speed;
-    f.exitVz = (Math.random() - 0.5) * 300;
-  }
-
-  explosionTween = gsap.to(
-    { p: 0 },
-    {
-      p: 1,
-      duration: 1.6,
-      ease: 'power4.out',
-      onUpdate: function () {
-        explosionProgress = this.targets()[0].p;
-      },
-      onComplete: () => {
-        explosionActive = false;
-        tulipsHidden = true;
-        tulipCtx.clearRect(0, 0, W, H);
-        startPhase2();
-      }
-    }
-  );
-}
-
-function updateTulips() {
+function updateFlowers() {
   if (tulipsHidden || explosionActive) return;
 
   smMouseX = lerp(smMouseX, mouseX, 0.07);
@@ -354,8 +280,8 @@ function initScene() {
   scene.background = null;
 
   camera = new THREE.PerspectiveCamera(25, window.innerWidth / window.innerHeight, 0.1, 100);
-  camera.position.set(0, 1.2, 7);
-  camera.lookAt(0, -0.3, 0);
+  camera.position.set(0, -0.5, 9.5);
+  camera.lookAt(0, -0.8, 0);
 
   renderer = new THREE.WebGLRenderer({
     canvas: threeCanvas,
@@ -535,11 +461,11 @@ function loadModel() {
         const size = box.getSize(new THREE.Vector3());
         const maxDim = Math.max(size.x, size.y, size.z);
         baseScale = 4 / maxDim;
-        modelGroup.scale.set(baseScale * 0.7, baseScale * 0.7, baseScale * 0.7);
+        modelGroup.scale.set(baseScale, baseScale, baseScale);
 
         model.position.sub(center);
         modelGroup.add(model);
-        modelGroup.position.y = -1.5;
+        modelGroup.position.y = -1.8;
         scene.add(modelGroup);
 
         storeInitialRotations();
@@ -634,8 +560,8 @@ function createFallbackFlower() {
   modelGroup.add(stem);
 
   baseScale = 1.5;
-  modelGroup.scale.set(baseScale * 0.7, baseScale * 0.7, baseScale * 0.7);
-  modelGroup.position.y = -1.5;
+  modelGroup.scale.set(baseScale, baseScale, baseScale);
+  modelGroup.position.y = -1.8;
   scene.add(modelGroup);
 }
 
@@ -848,7 +774,7 @@ function animateModel() {
   if (modelGroup && isLanding) {
     const time = clock.getElapsedTime();
     modelGroup.rotation.y = Math.sin(time * 0.12) * 0.08;
-    modelGroup.position.y = -1.5 + Math.sin(time * 0.25) * 0.015;
+    modelGroup.position.y = -1.8 + Math.sin(time * 0.25) * 0.015;
   }
 }
 
@@ -866,8 +792,8 @@ function animate() {
   const delta = clock.getDelta();
   const time = clock.getElapsedTime();
 
-  updateTulips();
-  renderTulips(time);
+  updateFlowers();
+  renderFlowers(time);
 
   if (starParticles) starParticles.rotation.y += delta * 0.02;
   animateModel();
@@ -875,77 +801,96 @@ function animate() {
   renderer.render(scene, camera);
 }
 
-function startPhase2() {
-  const tl = gsap.timeline();
+function startFlowerExplosion() {
+  explosionActive = true;
+  explosionProgress = 0;
 
-  tl.to(modelGroup.scale, {
-    x: baseScale, y: baseScale, z: baseScale,
-    duration: 1.2,
-    ease: 'power3.out',
-  }, 0);
+  for (let i = 0; i < NUM_FLOWERS; i++) {
+    const f = flowers[i];
+    const angle = Math.atan2(f.baseY, f.baseX) + (Math.random() - 0.5) * 0.4;
+    const speed = 3000 + Math.random() * 4000;
+    f.exitVx = Math.cos(angle) * speed;
+    f.exitVy = Math.sin(angle) * speed;
+  }
 
-  const allPetals = [...outerPetals, ...middlePetals, ...innerPetals];
-  allPetals.forEach((mesh) => {
-    const init = initialRotations.get(mesh);
-    if (init) {
-      tl.to(mesh.rotation, {
-        x: init.x, y: init.y, z: init.z,
-        duration: 1.2,
-        ease: 'power3.out',
-        overwrite: 'auto',
-      }, 0);
+  explosionTween = gsap.to(
+    { p: 0 },
+    {
+      p: 1,
+      duration: 3.8,
+      ease: 'power2.out',
+      onUpdate: function () {
+        explosionProgress = this.targets()[0].p;
+      },
+      onComplete: () => {
+        explosionActive = false;
+        tulipsHidden = true;
+        if (tulipCtx) tulipCtx.clearRect(0, 0, W, H);
+      }
     }
-  });
+  );
 }
 
 function onReveal() {
   if (!isLanding) return;
   isLanding = false;
 
-  revealBtn.style.pointerEvents = 'none';
-  landing.classList.add('hidden');
+  // Action A: Instantly remove the REVEAL button
+  revealBtn.style.display = 'none';
 
-  startExplosion();
+  // Action B: Gracefully scatter flowers off-screen
+  startFlowerExplosion();
 
-  holdTimeout = setTimeout(completeReveal, 5000);
+  // Action C: Keep the intro card text visible, hold frozen for 7 seconds
+  holdTimeout = setTimeout(completeReveal, 7000);
 }
 
 function completeReveal() {
   if (isRevealed) return;
   isRevealed = true;
 
-  document.body.classList.add('scrollable');
-
-  gsap.to(camera.position, {
-    z: 4.5,
-    duration: 1.5,
-    ease: 'power2.inOut',
-  });
-
-  if (starParticles) {
-    gsap.to(starParticles.scale, {
-      x: 2.5, y: 2.5, z: 2.5,
-      duration: 1.5,
-      ease: 'power2.inOut',
-    });
-  }
-
-  gsap.to(scrollContainer, {
-    visibility: 'visible',
-    pointerEvents: 'auto',
+  // Step C: Fade out intro text card over 1.5s, then hide from layout
+  gsap.to(landing, {
+    opacity: 0,
     duration: 1.5,
     ease: 'power2.out',
-  });
+    onComplete: () => {
+      landing.style.visibility = 'hidden';
 
-  setTimeout(() => {
-    setupScrollAnimation();
-    setupSectionReveals();
-    ScrollTrigger.refresh();
-  }, 1800);
+      // Step D: Only after text is fully gone, trigger 3.5s cosmic warp
+      gsap.to(camera.position, {
+        z: 5.5,
+        duration: 3.5,
+        ease: 'power1.inOut',
+      });
+
+      if (starParticles) {
+        gsap.to(starParticles.scale, {
+          x: 2.5, y: 2.5, z: 2.5,
+          duration: 3.5,
+          ease: 'power1.inOut',
+        });
+      }
+
+      // After warp completes, reveal scrollContainer and unlock scrolling
+      setTimeout(() => {
+        document.body.classList.add('scrollable');
+        gsap.to(scrollContainer, {
+          visibility: 'visible',
+          pointerEvents: 'auto',
+          duration: 0.6,
+          ease: 'power2.out',
+        });
+        setupScrollAnimation();
+        setupSectionReveals();
+        ScrollTrigger.refresh();
+      }, 3700);
+    }
+  });
 }
 
 async function init() {
-  initTulipCanvas();
+  initFlowers();
   initScene();
   createStarfield();
   setupLights();
