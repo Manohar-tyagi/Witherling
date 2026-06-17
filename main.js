@@ -9,6 +9,9 @@ const revealBtn = document.getElementById('revealBtn');
 const btnYes = document.getElementById('btnYes');
 const btnNo = document.getElementById('btnNo');
 const particleOverlay = document.getElementById('particleOverlay');
+const scrollProgress = document.getElementById('scrollProgress');
+const scrollProgressFill = document.getElementById('scrollProgressFill');
+const cursorGlow = document.getElementById('cursorGlow');
 
 let scene, camera, renderer, model, modelGroup;
 let outerPetals = [];
@@ -50,6 +53,9 @@ let W, H, tulipCtx;
 
 let mouseX = -9999, mouseY = -9999;
 let smMouseX = -9999, smMouseY = -9999;
+
+const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isCoarsePointer = window.matchMedia('(max-width: 768px), (pointer: coarse)').matches;
 
 function lerp(a, b, t) { return a + (b - a) * t; }
 
@@ -566,49 +572,196 @@ function createFallbackFlower() {
 }
 
 function setupScrollAnimation() {
-  if (outerPetals.length === 0 && middlePetals.length === 0 && innerPetals.length === 0) return;
+  if (!modelGroup) return;
 
-  const tl = gsap.timeline({
-    scrollTrigger: {
-      trigger: '#scrollContainer',
-      start: 'top top',
-      end: 'bottom bottom',
-      scrub: 1.2,
-      invalidateOnRefresh: true,
+  const sections = gsap.utils.toArray('.scroll-section');
+  const masterTrigger = {
+    trigger: '#scrollContainer',
+    start: 'top top',
+    end: 'bottom bottom',
+    scrub: 1,
+    invalidateOnRefresh: true,
+  };
+
+  // The tulip model is a single fused sculpt rather than separable petal
+  // rings, so it is animated as one rigid body: a gentle full-model bow,
+  // turn, and drift that tracks the reading position. Nothing here ever
+  // rotates a sub-mesh independently, so the bloom can't pull itself apart.
+  const tiltTarget = { x: modelGroup.rotation.x, y: modelGroup.rotation.y, z: modelGroup.rotation.z };
+  const baseY = modelGroup.position.y;
+  const baseModelScale = modelGroup.scale.x;
+  // Reduced-motion preference keeps the page navigable without the fuller
+  // camera dolly / model swing, while touch devices get a slightly calmer
+  // version that won't feel disorienting on smaller, closer screens.
+  const motionScale = prefersReducedMotion ? 0.15 : (isCoarsePointer ? 0.65 : 1);
+
+  const tl = gsap.timeline({ scrollTrigger: masterTrigger });
+
+  // Whole-flower choreography: a single continuous bow + turn + settle,
+  // built from one rigid transform so the silhouette stays intact throughout.
+  // Each segment is given an explicit duration (summing to 1) rather than
+  // relying on GSAP's default tween length, so timeline progress maps
+  // predictably to scroll position with no overshoot or snapping.
+  tl.to(modelGroup.rotation, { x: tiltTarget.x - 0.5 * motionScale, y: tiltTarget.y + 0.9 * motionScale, duration: 0.34, ease: 'none' }, 0)
+    .to(modelGroup.rotation, { y: tiltTarget.y + 1.85 * motionScale, x: tiltTarget.x - 0.15 * motionScale, duration: 0.33, ease: 'none' }, 0.34)
+    .to(modelGroup.rotation, { y: tiltTarget.y + 2.6 * motionScale, x: tiltTarget.x + 0.25 * motionScale, duration: 0.33, ease: 'none' }, 0.67)
+    .to(modelGroup.position, { y: baseY + 1.35 * motionScale, duration: 0.5, ease: 'none' }, 0)
+    .to(modelGroup.position, { x: -1.6 * motionScale, duration: 0.5, ease: 'none' }, 0)
+    .to(modelGroup.position, { x: 1.6 * motionScale, duration: 0.35, ease: 'none' }, 0.5)
+    .to(modelGroup.position, { x: 0, y: baseY + 0.4 * motionScale, duration: 0.15, ease: 'none' }, 0.85)
+    .to(modelGroup.scale, { x: baseModelScale * (1 - 0.28 * motionScale), y: baseModelScale * (1 - 0.28 * motionScale), z: baseModelScale * (1 - 0.28 * motionScale), duration: 0.5, ease: 'none' }, 0)
+    .to(modelGroup.scale, { x: baseModelScale * (1 - 0.1 * motionScale), y: baseModelScale * (1 - 0.1 * motionScale), z: baseModelScale * (1 - 0.1 * motionScale), duration: 0.15, ease: 'none' }, 0.85);
+
+  // Camera does a slow dolly/orbit so depth keeps changing as the reader
+  // descends, reinforcing the sense that this is one continuous 3D space.
+  // Offsets are relative to wherever the camera actually is when this runs
+  // (after the post-reveal cosmic warp has already moved it), not the
+  // scene's original setup position, so the dolly starts from the right place.
+  const camBaseY = camera.position.y;
+  const camBaseZ = camera.position.z;
+  tl.to(camera.position, { y: camBaseY + 0.9 * motionScale, z: camBaseZ - 1.3 * motionScale, duration: 0.5, ease: 'none' }, 0)
+    .to(camera.position, { y: camBaseY + 0.3 * motionScale, z: camBaseZ - 2.1 * motionScale, duration: 0.35, ease: 'none' }, 0.5)
+    .to(camera.position, { y: camBaseY - 0.1 * motionScale, z: camBaseZ - 0.5 * motionScale, duration: 0.15, ease: 'none' }, 0.85);
+
+  // Starfield drifts opposite the camera for parallax depth, and the tulip
+  // canvas (the flat decorative field of tulips) gently dims as we move
+  // into the narrative so the focus shifts to the story content.
+  if (starParticles) {
+    tl.to(starParticles.rotation, { y: `+=${0.6 * motionScale}`, x: `+=${0.15 * motionScale}`, duration: 1, ease: 'none' }, 0);
+    tl.to(starParticles.position, { y: -0.8 * motionScale, duration: 1, ease: 'none' }, 0);
+  }
+
+  tl.to({}, {
+    duration: 1,
+    onUpdate: function () {
+      const p = this.progress();
+      if (tulipCanvas) tulipCanvas.style.opacity = String(1 - Math.min(p * 1.4, 1) * 0.85);
     }
-  });
+  }, 0);
 
-  outerPetals.forEach((mesh) => {
-    const init = initialRotations.get(mesh);
-    const startRot = init ? init.x : (mesh.rotation.x || 0);
-    tl.to(mesh.rotation, { x: startRot - 1.4, ease: 'power2.out' }, 0);
+  // Per-section: each narrative card gets its own slight independent sway
+  // so the model doesn't feel locked to a single timeline beat.
+  sections.forEach((section, i) => {
+    gsap.to(modelGroup.rotation, {
+      z: tiltTarget.z + (i % 2 === 0 ? 0.06 : -0.06) * motionScale,
+      ease: 'sine.inOut',
+      scrollTrigger: {
+        trigger: section,
+        start: 'top bottom',
+        end: 'bottom top',
+        scrub: 2,
+      }
+    });
   });
-
-  middlePetals.forEach((mesh) => {
-    const init = initialRotations.get(mesh);
-    const startRot = init ? init.x : (mesh.rotation.x || 0);
-    tl.to(mesh.rotation, { x: startRot - 0.9, ease: 'power2.out' }, 0.25);
-  });
-
-  innerPetals.forEach((mesh) => {
-    const init = initialRotations.get(mesh);
-    const startRot = init ? init.x : (mesh.rotation.x || 0);
-    tl.to(mesh.rotation, { x: startRot - 0.4, ease: 'power2.out' }, 0.5);
-  });
-
-  tl.to(modelGroup.position, { y: -0.3, ease: 'power1.out' }, 0);
 }
 
 function setupSectionReveals() {
-  const sections = document.querySelectorAll('.scroll-section');
-  sections.forEach((section) => {
-    gsap.fromTo(section,
-      { opacity: 0, y: 60 },
+  const narrativeCards = gsap.utils.toArray('.narrative-card');
+  // Touch devices get a calmer, flatter version of the tilt: the rotateX/Y
+  // values still read as "depth" on a static screenshot-like glance but
+  // don't fight the page's own scroll momentum or induce jitter on mobile
+  // GPUs. Reduced-motion users get a plain cross-fade with no transform.
+  const tiltScale = prefersReducedMotion ? 0 : (isCoarsePointer ? 0.4 : 1);
+
+  narrativeCards.forEach((card) => {
+    const isRight = card.classList.contains('right');
+    const polaroid = card.querySelector('.polaroid');
+    const heading = card.querySelector('h2');
+    const paragraphs = card.querySelectorAll('.narrative-text p');
+    const sectionNumber = card.querySelector('.section-number');
+
+    gsap.set(card, { transformPerspective: 1600 });
+
+    const tl = gsap.timeline({
+      scrollTrigger: {
+        trigger: card,
+        start: 'top 88%',
+        end: 'top 35%',
+        toggleActions: 'play none none reverse',
+        onEnter: () => card.classList.add('in-view'),
+        onLeaveBack: () => card.classList.remove('in-view'),
+      }
+    });
+
+    tl.fromTo(card,
+      { opacity: 0, y: 90 * (prefersReducedMotion ? 0.3 : 1), rotateX: 8 * tiltScale, rotateY: (isRight ? -6 : 6) * tiltScale },
+      { opacity: 1, y: 0, rotateX: 0, rotateY: 0, duration: prefersReducedMotion ? 0.6 : 1.3, ease: 'power3.out' }
+    );
+
+    tl.fromTo(polaroid,
+      { opacity: 0, x: (isRight ? 70 : -70) * (prefersReducedMotion ? 0.2 : 1), rotate: (isRight ? 10 : -10) * tiltScale, scale: 0.85 },
+      { opacity: 1, x: 0, scale: 1, duration: prefersReducedMotion ? 0.6 : 1.1, ease: 'power3.out' },
+      0.05
+    );
+
+    tl.fromTo(sectionNumber,
+      { opacity: 0, x: -16 },
+      { opacity: 1, x: 0, duration: 0.7, ease: 'power2.out' },
+      0.25
+    );
+
+    tl.fromTo(heading,
+      { opacity: 0, y: 24, clipPath: 'inset(0 0 100% 0)' },
+      { opacity: 1, y: 0, clipPath: 'inset(0 0 0% 0)', duration: 0.9, ease: 'power3.out' },
+      0.32
+    );
+
+    tl.fromTo(paragraphs,
+      { opacity: 0, y: 18 },
+      { opacity: 1, y: 0, duration: 0.8, ease: 'power2.out', stagger: 0.12 },
+      0.5
+    );
+  });
+
+  // Proposal section: the finale gets its own slower, more deliberate
+  // entrance so it reads as the destination rather than another card.
+  const proposalCard = document.querySelector('.proposal-card');
+  if (proposalCard) {
+    gsap.fromTo(proposalCard,
+      { opacity: 0, y: 50, scale: 0.92, filter: 'blur(8px)' },
       {
-        opacity: 1, y: 0, duration: 1.2, ease: 'power3.out',
-        scrollTrigger: { trigger: section, start: 'top 85%', end: 'top 40%', toggleActions: 'play none none reverse' }
+        opacity: 1, y: 0, scale: 1, filter: 'blur(0px)',
+        duration: 1.4, ease: 'power3.out',
+        scrollTrigger: { trigger: proposalCard, start: 'top 80%', end: 'top 40%', toggleActions: 'play none none reverse' }
       }
     );
+  }
+}
+
+function setupScrollProgress() {
+  if (!scrollProgress) return;
+  scrollProgress.classList.add('visible');
+
+  ScrollTrigger.create({
+    trigger: '#scrollContainer',
+    start: 'top top',
+    end: 'bottom bottom',
+    onUpdate: (self) => {
+      if (scrollProgressFill) scrollProgressFill.style.height = (self.progress * 100) + '%';
+    }
+  });
+}
+
+function setupCursorGlow() {
+  if (!cursorGlow || prefersReducedMotion) return;
+  let gx = window.innerWidth / 2;
+  let gy = window.innerHeight / 2;
+  let cx = gx, cy = gy;
+  let shown = false;
+
+  document.addEventListener('mousemove', (e) => {
+    gx = e.clientX;
+    gy = e.clientY;
+    if (!shown) {
+      shown = true;
+      cursorGlow.classList.add('visible');
+    }
+  });
+
+  gsap.ticker.add(() => {
+    cx = lerp(cx, gx, 0.08);
+    cy = lerp(cy, gy, 0.08);
+    cursorGlow.style.transform = `translate(${cx}px, ${cy}px) translate(-50%, -50%)`;
   });
 }
 
@@ -778,6 +931,7 @@ function animateModel() {
   }
 }
 
+let resizeRefreshTimeout = null;
 function handleResize() {
   W = window.innerWidth;
   H = window.innerHeight;
@@ -785,6 +939,11 @@ function handleResize() {
   camera.aspect = W / H;
   camera.updateProjectionMatrix();
   renderer.setSize(W, H);
+
+  if (!isLanding && typeof ScrollTrigger !== 'undefined') {
+    clearTimeout(resizeRefreshTimeout);
+    resizeRefreshTimeout = setTimeout(() => ScrollTrigger.refresh(), 200);
+  }
 }
 
 function animate() {
@@ -817,7 +976,7 @@ function startFlowerExplosion() {
     { p: 0 },
     {
       p: 1,
-      duration: 3.8,
+      duration: 3,
       ease: 'power2.out',
       onUpdate: function () {
         explosionProgress = this.targets()[0].p;
@@ -883,6 +1042,7 @@ function completeReveal() {
         });
         setupScrollAnimation();
         setupSectionReveals();
+        setupScrollProgress();
         ScrollTrigger.refresh();
       }, 3700);
     }
@@ -900,6 +1060,7 @@ async function init() {
   document.addEventListener('touchmove', (e) => { const t = e.touches[0]; mouseX = t.clientX; mouseY = t.clientY; }, { passive: true });
 
   handleNoButton();
+  setupCursorGlow();
   revealBtn.addEventListener('click', onReveal);
   window.addEventListener('resize', handleResize);
   animate();

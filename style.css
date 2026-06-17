@@ -41,6 +41,7 @@ canvas#tulipCanvas {
   z-index: 10;
   display: block;
   pointer-events: none;
+  transition: opacity 0.4s ease-out;
 }
 
 canvas#threeCanvas {
@@ -168,6 +169,7 @@ canvas#threeCanvas {
   align-items: center;
   justify-content: center;
   padding: 6rem 2rem;
+  perspective: 1600px;
 }
 
 .narrative-card {
@@ -175,6 +177,8 @@ canvas#threeCanvas {
   gap: 3rem;
   align-items: center;
   padding: 3rem 3.5rem;
+  will-change: transform, opacity, filter;
+  transform-style: preserve-3d;
 }
 
 .narrative-card.left {
@@ -194,6 +198,8 @@ canvas#threeCanvas {
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.2);
   transform: rotate(-1.5deg);
   transition: transform 0.6s ease;
+  position: relative;
+  overflow: hidden;
 }
 
 .narrative-card.right .polaroid {
@@ -202,6 +208,23 @@ canvas#threeCanvas {
 
 .polaroid:hover {
   transform: rotate(0deg) scale(1.02);
+}
+
+.polaroid::after {
+  content: '';
+  position: absolute;
+  top: -50%;
+  left: -60%;
+  width: 40%;
+  height: 200%;
+  background: linear-gradient(115deg, transparent, rgba(255, 255, 255, 0.16), transparent);
+  transform: rotate(15deg) translateX(-120%);
+  pointer-events: none;
+}
+
+.narrative-card.in-view .polaroid::after {
+  transition: transform 1.4s cubic-bezier(0.25, 1, 0.3, 1) 0.3s;
+  transform: rotate(15deg) translateX(320%);
 }
 
 .polaroid-img {
@@ -245,8 +268,22 @@ canvas#threeCanvas {
   font-size: 0.55rem;
   letter-spacing: 0.4em;
   color: rgba(232, 221, 208, 0.3);
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
   margin-bottom: 0.8rem;
+}
+
+.num-line {
+  display: inline-block;
+  width: 0;
+  height: 1px;
+  background: rgba(200, 120, 100, 0.6);
+  transition: width 1.1s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.narrative-card.in-view .num-line {
+  width: 28px;
 }
 
 h2 {
@@ -280,6 +317,30 @@ h2 {
 .proposal-card {
   text-align: center;
   padding: 4rem;
+  position: relative;
+}
+
+.proposal-card::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 20px;
+  background: radial-gradient(ellipse at center, rgba(200, 120, 100, 0.12), transparent 70%);
+  opacity: 0;
+  animation: proposalGlow 4.5s ease-in-out infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+@keyframes proposalGlow {
+  0%, 100% { opacity: 0.3; transform: scale(0.98); }
+  50% { opacity: 0.8; transform: scale(1.02); }
+}
+
+button:focus-visible,
+.choice-btn:focus-visible {
+  outline: 1px solid rgba(232, 221, 208, 0.7);
+  outline-offset: 4px;
 }
 
 .proposal-question {
@@ -459,4 +520,62 @@ h2 {
 
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(232, 221, 208, 0.3);
+}
+
+/* ============ Scroll progress rail ============ */
+#scrollProgress {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 3px;
+  height: 100vh;
+  z-index: 50;
+  background: rgba(232, 221, 208, 0.06);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.6s ease;
+}
+
+#scrollProgress.visible {
+  opacity: 1;
+}
+
+#scrollProgressFill {
+  width: 100%;
+  height: 0%;
+  background: linear-gradient(180deg, #c87864, #e8ddd0);
+  box-shadow: 0 0 12px rgba(200, 120, 100, 0.6);
+  transform-origin: top;
+  transition: height 0.05s linear;
+}
+
+/* ============ Cursor ambient glow ============ */
+#cursorGlow {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 420px;
+  height: 420px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(200, 120, 100, 0.07), transparent 70%);
+  pointer-events: none;
+  z-index: 3;
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  will-change: transform;
+}
+
+#cursorGlow.visible {
+  opacity: 1;
+}
+
+@media (max-width: 768px) {
+  #scrollProgress, #cursorGlow {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
 }
