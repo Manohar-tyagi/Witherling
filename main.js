@@ -30,6 +30,28 @@ let particleLife = [];
 let isParticleActive = false;
 let baseScale = 1;
 let starParticles = null;
+let nebulaSprites = [];
+let emberMotes = null;
+let emberData = null;
+let mercuryBlobs = [];
+let silkRibbons = [];
+let mouseWorld = new THREE.Vector3(); // current mouse position projected to flower surface
+let finaleGlowLight = null;
+// blurAmount: 1 = fully soft/out-of-focus (flower emerging from darkness
+// at the top of the page), 0 = tack sharp. Scroll-driven; see setupScrollAnimation.
+// Applied as a CSS filter on the 3D canvases rather than a postprocessing
+// pass, since the classic three.js BokehShader hardcodes opaque alpha
+// output and would have broken this page's layered transparent-canvas design.
+let focusState = { blurAmount: 1 };
+
+// Spherical orbit camera state, driven by the scroll timeline and applied
+// every frame in animate(). Polar angle is measured from level: polar = 0
+// means level with the flower (looking at it horizontally), polar = PI/2
+// means directly overhead looking straight down. Using an explicit orbit
+// instead of independent x/y/z position tweens means the camera can swing
+// all the way to a top-down shot while always staying aimed at the flower.
+let cameraOrbit = { radius: 9.5, polar: 0, azimuth: 0, targetY: -0.8 };
+let orbitActive = false;
 
 const initialRotations = new Map();
 
@@ -289,6 +311,17 @@ function initScene() {
   camera.position.set(0, -0.5, 9.5);
   camera.lookAt(0, -0.8, 0);
 
+  // Keep the orbit state's spherical coordinates consistent with this
+  // starting position, so the very first scroll-driven orbit tween starts
+  // from exactly where the camera already is rather than snapping.
+  // polar = 0 is level with the flower (looking horizontally); the scroll
+  // finale brings it up to a gentle high three-quarter angle, not all the
+  // way to vertical, since a true top-down view exposed how the scanned
+  // bloom isn't perfectly radially symmetric (it would visually drift
+  // off-center as the model turned beneath an overhead camera).
+  cameraOrbit.targetY = -0.8;
+  syncCameraOrbitFromPosition();
+
   renderer = new THREE.WebGLRenderer({
     canvas: threeCanvas,
     alpha: true,
@@ -340,16 +373,260 @@ function createStarfield() {
   scene.add(starParticles);
 }
 
+function makeRadialGradientTexture(colorStops, size = 256) {
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d');
+  const gradient = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+  colorStops.forEach(([stop, color]) => gradient.addColorStop(stop, color));
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Soft, slow-drifting nebula clouds behind the starfield: a handful of large
+// additive-blended billboards in colors pulled from the tulip's own palette,
+// so the whole scene feels like one composed environment rather than a
+// generic "flower in front of a sky" setup.
+function createNebula() {
+  nebulaSprites = [];
+  const nebulaTex = makeRadialGradientTexture([
+    [0, 'rgba(255,255,255,1)'],
+    [1, 'rgba(255,255,255,0)'],
+  ]);
+
+  const palette = [
+    { color: 0x6e1f3a, scale: 22, opacity: 0.22 },  // deep rose
+    { color: 0x2a1840, scale: 26, opacity: 0.18 },  // dusk violet
+    { color: 0x16263d, scale: 24, opacity: 0.16 },  // midnight blue
+    { color: 0x4a2418, scale: 18, opacity: 0.14 },  // ember umber
+  ];
+
+  palette.forEach((p, i) => {
+    const mat = new THREE.SpriteMaterial({
+      map: nebulaTex,
+      color: p.color,
+      transparent: true,
+      opacity: p.opacity,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    const sprite = new THREE.Sprite(mat);
+    const angle = (i / palette.length) * Math.PI * 2;
+    sprite.position.set(
+      Math.cos(angle) * 9 + (Math.random() - 0.5) * 4,
+      Math.sin(angle) * 5 + (Math.random() - 0.5) * 4,
+      -14 - Math.random() * 8
+    );
+    sprite.scale.set(p.scale, p.scale, 1);
+    sprite.userData.driftSpeed = 0.02 + Math.random() * 0.03;
+    sprite.userData.driftPhase = Math.random() * Math.PI * 2;
+    sprite.userData.baseX = sprite.position.x;
+    sprite.userData.baseY = sprite.position.y;
+    sprite.userData.scrollOffsetY = 0;
+    scene.add(sprite);
+    nebulaSprites.push(sprite);
+  });
+}
+
+// Tiny warm "ember" motes drifting upward through the scene, like embers
+// rising from a candle — reinforces the candlelit/romantic mood and gives
+// the empty space around the tulip something alive happening in it.
+function createEmberMotes() {
+  const count = 90;
+  const geometry = new THREE.BufferGeometry();
+  const positions = new Float32Array(count * 3);
+  const speeds = new Float32Array(count);
+  const phases = new Float32Array(count);
+
+  for (let i = 0; i < count; i++) {
+    positions[i * 3] = (Math.random() - 0.5) * 14;
+    positions[i * 3 + 1] = (Math.random() - 0.5) * 12 - 2;
+    positions[i * 3 + 2] = (Math.random() - 0.5) * 10 + 2;
+    speeds[i] = 0.15 + Math.random() * 0.25;
+    phases[i] = Math.random() * Math.PI * 2;
+  }
+
+  geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  emberData = { speeds, phases, basePositions: positions.slice() };
+
+  const emberTex = makeRadialGradientTexture([
+    [0, 'rgba(255,210,160,1)'],
+    [0.4, 'rgba(230,140,100,0.7)'],
+    [1, 'rgba(200,100,80,0)'],
+  ], 64);
+
+  const material = new THREE.PointsMaterial({
+    size: 0.09,
+    map: emberTex,
+    transparent: true,
+    opacity: 0.85,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    sizeAttenuation: true,
+    color: 0xf0b896,
+  });
+
+  emberMotes = new THREE.Points(geometry, material);
+  scene.add(emberMotes);
+}
+
+// Creates a lightweight gradient-sphere canvas texture that gives metallic
+// Three.js materials convincing chrome reflections without a real HDR envmap.
+function makeChromeEnvMap() {
+  const size = 256;
+  const c = document.createElement('canvas');
+  c.width = size * 2; c.height = size;
+  const ctx = c.getContext('2d');
+
+  // Simulate a dark studio environment with two soft light sources
+  const grad = ctx.createLinearGradient(0, 0, size * 2, size);
+  grad.addColorStop(0.0, '#05050a');
+  grad.addColorStop(0.15, '#1a1a2a');
+  grad.addColorStop(0.3, '#0a0610');
+  grad.addColorStop(0.45, '#2a1020');  // warm rose nebula reflection
+  grad.addColorStop(0.6, '#0c0c18');
+  grad.addColorStop(0.75, '#161624');
+  grad.addColorStop(0.9, '#05050a');
+  grad.addColorStop(1.0, '#05050a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size * 2, size);
+
+  // Add two soft hot-spot reflections
+  for (const [x, y, r, col] of [
+    [size * 0.55, size * 0.35, size * 0.18, 'rgba(220,210,255,0.7)'],
+    [size * 1.4, size * 0.6, size * 0.12, 'rgba(255,180,120,0.45)'],
+  ]) {
+    const spot = ctx.createRadialGradient(x, y, 0, x, y, r);
+    spot.addColorStop(0, col);
+    spot.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = spot;
+    ctx.fillRect(0, 0, size * 2, size);
+  }
+
+  const tex = new THREE.CanvasTexture(c, THREE.EquirectangularReflectionMapping);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+// Liquid mercury blobs: chrome metaball-like spheres floating behind the
+// flower. They pulse/morph with a sine-wave scale, and scroll pulls them
+// magnetically toward the flower stem. Each blob's position and morph phase
+// is stored in userData so updateMercuryBlobs() can animate them every frame.
+function createMercuryBlobs() {
+  const envMap = makeChromeEnvMap();
+  scene.environment = envMap; // makes all metallic materials in the scene reflective
+
+  const blobPositions = [
+    [-3.5, 1.8, -3.2],
+    [ 3.2, 0.6, -4.0],
+    [-2.2, -1.2, -2.8],
+    [ 2.8, -0.8, -3.5],
+    [-1.0,  2.4, -5.0],
+    [ 1.5,  1.0, -2.5],
+    [-3.0, -0.2, -4.5],
+  ];
+
+  blobPositions.forEach(([x, y, z], i) => {
+    const baseRadius = 0.18 + Math.random() * 0.22;
+    const geo = new THREE.SphereGeometry(baseRadius, 40, 40);
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: 0xaaaaaa,
+      metalness: 1.0,
+      roughness: 0.02,
+      envMap,
+      envMapIntensity: 1.4,
+    });
+    const blob = new THREE.Mesh(geo, mat);
+    blob.position.set(x, y, z);
+    blob.userData = {
+      basePos: new THREE.Vector3(x, y, z),
+      baseRadius,
+      morphPhase: Math.random() * Math.PI * 2,
+      morphSpeed: 0.35 + Math.random() * 0.25,
+      scrollPull: 0,   // 0–1, set by scroll progress
+    };
+    scene.add(blob);
+    mercuryBlobs.push(blob);
+  });
+}
+
+// Silk ribbons: sinusoidal Line curves that ripple like cloth in slow motion.
+// Using THREE.Line + in-place BufferAttribute updates instead of TubeGeometry
+// rebuild every frame — eliminates per-frame geometry allocation / GC jank.
+const RIBBON_STEPS = 42;
+function createSilkRibbons() {
+  const ribbonDefs = [
+    { color: 0x3d0810, opacity: 0.78, xBias: -0.65, additive: false },
+    { color: 0x8a0020, opacity: 0.45, xBias:  0.52, additive: false },
+    { color: 0xffeedd, opacity: 0.09, xBias:  0.88, additive: true  },
+    { color: 0x5a1020, opacity: 0.55, xBias: -0.92, additive: false },
+  ];
+
+  ribbonDefs.forEach((def, ri) => {
+    const count = RIBBON_STEPS + 1;
+    const positions = new Float32Array(count * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    updateRibbonPositions(positions, ri, def.xBias, 0);
+    geo.attributes.position.needsUpdate = true;
+    geo.computeBoundingSphere();
+
+    const mat = new THREE.LineBasicMaterial({
+      color: def.color,
+      transparent: true,
+      opacity: def.opacity,
+      blending: def.additive ? THREE.AdditiveBlending : THREE.NormalBlending,
+      depthWrite: false,
+    });
+
+    const line = new THREE.Line(geo, mat);
+    line.userData = { ribbonIndex: ri, def };
+    scene.add(line);
+    silkRibbons.push(line);
+  });
+}
+
+// Writes ribbon point positions directly into a Float32Array in-place.
+function updateRibbonPositions(positions, index, xBias, time) {
+  for (let i = 0; i <= RIBBON_STEPS; i++) {
+    const t = i / RIBBON_STEPS;
+    const y = 3.2 - t * 7.8;
+    const sway = Math.sin(t * Math.PI * 3.2 + time * 0.45 + index * 1.1) * (0.55 + t * 0.38);
+    const x = xBias * (0.38 + t * 0.58) + sway * 0.48;
+    const z = -2.1 - t * 1.6 + Math.cos(t * Math.PI * 2.1 + time * 0.28) * 0.32;
+    positions[i * 3]     = x;
+    positions[i * 3 + 1] = y;
+    positions[i * 3 + 2] = z;
+  }
+}
+
+function updateSilkRibbons(time) {
+  if (isCoarsePointer && (Math.round(time * 30) % 2 !== 0)) return;
+  silkRibbons.forEach((ribbon) => {
+    const { ribbonIndex, def } = ribbon.userData;
+    const posAttr = ribbon.geometry.attributes.position;
+    updateRibbonPositions(posAttr.array, ribbonIndex, def.xBias, time);
+    posAttr.needsUpdate = true;
+  });
+}
+
 function setupLights() {
-  const ambient = new THREE.AmbientLight(0x221a18, 0.3);
+  // Soft ambient — dark, matching the black-cosmos background, slightly warm
+  const ambient = new THREE.AmbientLight(0x1a0f0d, 0.55);
   scene.add(ambient);
 
-  const warmSpot = new THREE.SpotLight(0xf0c8a0, 10);
-  warmSpot.position.set(2, 4, 3);
-  warmSpot.angle = 0.35;
-  warmSpot.penumbra = 0.6;
-  warmSpot.decay = 1.2;
-  warmSpot.distance = 20;
+  // Key light: slightly less intense now that the surface is much rougher —
+  // on high-roughness materials a too-bright spotlight creates a hot, flat disc
+  const warmSpot = new THREE.SpotLight(0xffd4a0, 7.5);
+  warmSpot.position.set(2.5, 5, 4);
+  warmSpot.angle = 0.32;
+  warmSpot.penumbra = 0.75;
+  warmSpot.decay = 1.4;
+  warmSpot.distance = 22;
   warmSpot.castShadow = true;
   warmSpot.shadow.mapSize.width = 1024;
   warmSpot.shadow.mapSize.height = 1024;
@@ -357,52 +634,134 @@ function setupLights() {
   scene.add(warmSpot);
   scene.add(warmSpot.target);
 
-  const icyBlue = new THREE.DirectionalLight(0x8ab4d4, 6);
-  icyBlue.position.set(-1, 1.5, -5);
-  icyBlue.target.position.set(0, 0, 0);
-  icyBlue.castShadow = true;
-  scene.add(icyBlue);
-  scene.add(icyBlue.target);
+  // Cool rim from upper-left-back — catches the outer petal edges with a
+  // cold blue-white halo, giving the flower separation from the dark BG
+  const rimLight = new THREE.DirectionalLight(0xb8d4f0, 4.5);
+  rimLight.position.set(-2, 3, -5);
+  rimLight.target.position.set(0, 0, 0);
+  rimLight.castShadow = false;
+  scene.add(rimLight);
+  scene.add(rimLight.target);
 
-  const fillLight = new THREE.DirectionalLight(0xd4b8a0, 0.8);
-  fillLight.position.set(-2, 1, 2);
-  scene.add(fillLight);
+  // Warm fill from below — simulates ambient bounce off the dark ground,
+  // so the underside of petals doesn't go pure black
+  const belowFill = new THREE.PointLight(0x6b1020, 3.5, 14, 2);
+  belowFill.position.set(0, -4, 2);
+  scene.add(belowFill);
 
-  const rimFill = new THREE.DirectionalLight(0xf0d8c0, 0.5);
-  rimFill.position.set(3, -1, -2);
-  scene.add(rimFill);
+  // Side fill — keeps the shaded half of the flower from being invisible
+  const sideFill = new THREE.DirectionalLight(0xd4b8a0, 0.9);
+  sideFill.position.set(-3, 0.5, 2);
+  scene.add(sideFill);
+
+  // Inner glow starts off, ramped up by the scroll finale
+  finaleGlowLight = new THREE.PointLight(0xffceac, 0, 6, 2);
+  finaleGlowLight.position.set(0, 0.3, 0);
+  scene.add(finaleGlowLight);
 }
 
-function createRoseGoldEmissive() {
-  const c = document.createElement('canvas');
-  c.width = 128;
-  c.height = 128;
-  const ctx = c.getContext('2d');
-  const gradient = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
-  gradient.addColorStop(0, 'rgba(200, 120, 100, 0.4)');
-  gradient.addColorStop(0.3, 'rgba(180, 100, 80, 0.15)');
-  gradient.addColorStop(0.7, 'rgba(160, 90, 70, 0.05)');
-  gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
-  ctx.fillStyle = gradient;
-  ctx.fillRect(0, 0, 128, 128);
-  return new THREE.CanvasTexture(c);
+// The source model's baked UV atlas is fragmented (visible as the blotchy
+// red/black checkerboard on the petals), and it also carries a second UV
+// channel that Three.js samples for emissiveMap by default — sampling a
+// gradient texture through those broken coordinates is what produced the
+// patchy lighting. The fix avoids texture sampling entirely: every mesh
+// gets a single flat PBR material, and a per-vertex color (computed once
+// from each vertex's local height) blends between a bloom color up top
+// and a deeper base color down near the tapered point, giving a clean,
+// deliberate two-tone tulip with no UV dependency at all.
+// Petal color: a deeply desaturated dark wine-crimson. The key insight is
+// that real dark tulip petals are almost maroon-black in low light — vivid
+// only where highlights catch them. This sits naturally against the near-black
+// background without looking like a painted toy.
+const TULIP_BLOOM_COLOR = new THREE.Color(0x5a1018);
+// Stem/base: dark forest-green, clearly botanical and distinct from the petals
+// while still receding naturally into the dark background.
+const TULIP_BASE_COLOR = new THREE.Color(0x16280e);
+const TULIP_BLEND_CENTER = 0.14;
+const TULIP_BLEND_SOFTNESS = 0.32;
+
+function applyHeightVertexColors(mesh) {
+  const geo = mesh.geometry;
+  if (!geo.attributes.position) return;
+  geo.computeBoundingBox();
+  const bbox = geo.boundingBox;
+  const minY = bbox.min.y;
+  const maxY = bbox.max.y;
+  const range = Math.max(maxY - minY, 0.0001);
+
+  const posAttr = geo.attributes.position;
+  const count = posAttr.count;
+  const colors = new Float32Array(count * 3);
+  const tmp = new THREE.Color();
+
+  for (let i = 0; i < count; i++) {
+    const y = posAttr.getY(i);
+    const normalized = (y - minY) / range; // 0 at base, 1 at top
+    let t = (normalized - TULIP_BLEND_CENTER) / TULIP_BLEND_SOFTNESS + 0.5;
+    t = Math.max(0, Math.min(1, t));
+    // smoothstep for a softer, more natural transition than a linear blend
+    t = t * t * (3 - 2 * t);
+    tmp.copy(TULIP_BASE_COLOR).lerp(TULIP_BLOOM_COLOR, t);
+    colors[i * 3] = tmp.r;
+    colors[i * 3 + 1] = tmp.g;
+    colors[i * 3 + 2] = tmp.b;
+  }
+
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 }
+
+// Shared uniforms for the hover-flex shader — updated every mousemove.
+// All petal materials share references to these same objects so a single
+// uniform write (mouseWorld, hoverRadius, flexStrength) reaches all meshes.
+const hoverUniforms = {
+  uMouseWorld: { value: new THREE.Vector3(9999, 9999, 9999) },
+  uHoverRadius: { value: 0.55 },
+  uFlexStrength: { value: 0.0 },  // animated in on mouse-enter, out on leave
+};
 
 function applyMaterialToMesh(mesh) {
   if (mesh.isMesh) {
-    const emissiveTex = createRoseGoldEmissive();
+    applyHeightVertexColors(mesh);
     const mat = new THREE.MeshPhysicalMaterial({
-      color: new THREE.Color(0x0B192C),
-      roughness: 0.65,
-      clearcoat: 0.3,
-      clearcoatRoughness: 0.4,
-      metalness: 0,
-      emissive: new THREE.Color(0xc87864),
-      emissiveIntensity: 0.08,
-      emissiveMap: emissiveTex,
-      envMapIntensity: 0.6,
+      color: 0xffffff,
+      vertexColors: true,
+      roughness: 0.76,
+      metalness: 0.0,
+      clearcoat: 0.0,
+      sheen: 0.28,
+      sheenRoughness: 0.85,
+      sheenColor: new THREE.Color(0x8a2030),
+      envMapIntensity: 0.25,
       side: THREE.DoubleSide,
     });
+
+    // Inject hover-proximity bend into the material's vertex shader.
+    // Each vertex within uHoverRadius of uMouseWorld is gently displaced
+    // outward along its normal, creating a realistic soft petal-flex.
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uMouseWorld = hoverUniforms.uMouseWorld;
+      shader.uniforms.uHoverRadius = hoverUniforms.uHoverRadius;
+      shader.uniforms.uFlexStrength = hoverUniforms.uFlexStrength;
+
+      shader.vertexShader = `
+        uniform vec3 uMouseWorld;
+        uniform float uHoverRadius;
+        uniform float uFlexStrength;
+      ` + shader.vertexShader.replace(
+        '#include <begin_vertex>',
+        `
+        #include <begin_vertex>
+        vec3 worldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+        float dist = length(worldPos - uMouseWorld);
+        float falloff = 1.0 - smoothstep(0.0, uHoverRadius, dist);
+        // Displace outward along the interpolated surface normal
+        vec3 worldNorm = normalize(mat3(modelMatrix) * normal);
+        transformed += normal * falloff * falloff * uFlexStrength * 0.18;
+        `
+      );
+    };
+    mat.needsUpdate = true;
+
     mesh.material = mat;
     mesh.castShadow = true;
     mesh.receiveShadow = true;
@@ -442,7 +801,6 @@ function loadModel() {
         modelGroup = new THREE.Group();
 
         model.traverse((child) => {
-          if (child.isMesh) console.log(child.name);
           applyMaterialToMesh(child);
           if (child.isMesh) {
             categorizeMesh(child, child.name || child.geometry.name || 'unknown');
@@ -476,6 +834,7 @@ function loadModel() {
 
         storeInitialRotations();
         applyLandingPose();
+        attachFinaleGlowToFlower();
 
         resolve();
       },
@@ -485,10 +844,22 @@ function loadModel() {
         createFallbackFlower();
         storeInitialRotations();
         applyLandingPose();
+        attachFinaleGlowToFlower();
         resolve();
       }
     );
   });
+}
+
+// Moves the warm glow light onto the flower itself once it exists, so it
+// travels with the bloom during the scroll choreography instead of staying
+// fixed in world space. `attach` preserves its current world position while
+// reparenting, then we snap it to sit just inside the bloom.
+function attachFinaleGlowToFlower() {
+  if (!finaleGlowLight) return;
+  const parent = model || modelGroup;
+  parent.attach(finaleGlowLight);
+  finaleGlowLight.position.set(0, 0.3, 0);
 }
 
 function storeInitialRotations() {
@@ -516,13 +887,13 @@ function createFallbackFlower() {
   modelGroup = new THREE.Group();
 
   const petalMat = new THREE.MeshPhysicalMaterial({
-    color: 0x0B192C,
-    roughness: 0.65,
-    clearcoat: 0.3,
-    clearcoatRoughness: 0.4,
-    metalness: 0,
-    emissive: 0xc87864,
-    emissiveIntensity: 0.08,
+    color: TULIP_BLOOM_COLOR.clone(),
+    roughness: 0.38,
+    clearcoat: 0.55,
+    clearcoatRoughness: 0.25,
+    metalness: 0.05,
+    sheen: 0.4,
+    sheenColor: new THREE.Color(0xe8a0a8),
     side: THREE.DoubleSide,
   });
 
@@ -536,7 +907,6 @@ function createFallbackFlower() {
       const h = 0.8 - ring * 0.15;
       const geom = new THREE.PlaneGeometry(w, h, 12, 16);
       const mesh = new THREE.Mesh(geom, petalMat.clone());
-      mesh.material.color.setHSL(0.63 + ring * 0.02, 0.4 + ring * 0.05, 0.12 + ring * 0.03);
       mesh.position.set(Math.sin(angle) * (0.25 + ring * 0.2), 0.1 + ring * 0.2, Math.cos(angle) * (0.25 + ring * 0.2));
       mesh.rotation.y = -angle;
       mesh.rotation.x = -0.3 - ring * 0.2;
@@ -553,8 +923,8 @@ function createFallbackFlower() {
   }
 
   const stemMat = new THREE.MeshPhysicalMaterial({
-    color: 0x1a2a1a,
-    roughness: 0.8,
+    color: TULIP_BASE_COLOR.clone(),
+    roughness: 0.5,
     metalness: 0,
   });
   const stemGeom = new THREE.CylinderGeometry(0.04, 0.06, 1.2, 8);
@@ -595,41 +965,91 @@ function setupScrollAnimation() {
   // version that won't feel disorienting on smaller, closer screens.
   const motionScale = prefersReducedMotion ? 0.15 : (isCoarsePointer ? 0.65 : 1);
 
+  // From here on the camera is driven by the spherical orbit state
+  // (cameraOrbit) rather than raw position tweens, and applyCameraOrbit()
+  // re-aims it at the flower every frame — this is what lets the finale
+  // swing the camera all the way to a top-down shot without the flower
+  // ever drifting out of frame. Resync first, since the warp sequence that
+  // ran just before this moved the camera with plain position tweens.
+  syncCameraOrbitFromPosition();
+  orbitActive = true;
+  const orbitStart = { radius: cameraOrbit.radius, polar: cameraOrbit.polar, azimuth: cameraOrbit.azimuth, targetY: cameraOrbit.targetY };
+
   const tl = gsap.timeline({ scrollTrigger: masterTrigger });
 
-  // Whole-flower choreography: a single continuous bow + turn + settle,
-  // built from one rigid transform so the silhouette stays intact throughout.
-  // Each segment is given an explicit duration (summing to 1) rather than
-  // relying on GSAP's default tween length, so timeline progress maps
-  // predictably to scroll position with no overshoot or snapping.
-  tl.to(modelGroup.rotation, { x: tiltTarget.x - 0.5 * motionScale, y: tiltTarget.y + 0.9 * motionScale, duration: 0.34, ease: 'none' }, 0)
-    .to(modelGroup.rotation, { y: tiltTarget.y + 1.85 * motionScale, x: tiltTarget.x - 0.15 * motionScale, duration: 0.33, ease: 'none' }, 0.34)
-    .to(modelGroup.rotation, { y: tiltTarget.y + 2.6 * motionScale, x: tiltTarget.x + 0.25 * motionScale, duration: 0.33, ease: 'none' }, 0.67)
-    .to(modelGroup.position, { y: baseY + 1.35 * motionScale, duration: 0.5, ease: 'none' }, 0)
-    .to(modelGroup.position, { x: -1.6 * motionScale, duration: 0.5, ease: 'none' }, 0)
-    .to(modelGroup.position, { x: 1.6 * motionScale, duration: 0.35, ease: 'none' }, 0.5)
-    .to(modelGroup.position, { x: 0, y: baseY + 0.4 * motionScale, duration: 0.15, ease: 'none' }, 0.85)
-    .to(modelGroup.scale, { x: baseModelScale * (1 - 0.28 * motionScale), y: baseModelScale * (1 - 0.28 * motionScale), z: baseModelScale * (1 - 0.28 * motionScale), duration: 0.5, ease: 'none' }, 0)
-    .to(modelGroup.scale, { x: baseModelScale * (1 - 0.1 * motionScale), y: baseModelScale * (1 - 0.1 * motionScale), z: baseModelScale * (1 - 0.1 * motionScale), duration: 0.15, ease: 'none' }, 0.85);
+  // ACT 1 — "Our Story" (0 -> 0.30): an establishing turn. The camera
+  // drifts slightly sideways and the flower settles into its resting tilt.
+  // The blur rack begins here too — the flower starts soft/out-of-focus
+  // at the very top of the page and sharpens as the reader commits to scrolling.
+  tl.to(modelGroup.rotation, { x: tiltTarget.x - 0.16 * motionScale, y: tiltTarget.y + 0.4 * motionScale, duration: 0.30, ease: 'none' }, 0)
+    .to(cameraOrbit, { azimuth: orbitStart.azimuth + 0.32 * motionScale, polar: orbitStart.polar + 0.08 * motionScale, duration: 0.30, ease: 'none' }, 0);
 
-  // Camera does a slow dolly/orbit so depth keeps changing as the reader
-  // descends, reinforcing the sense that this is one continuous 3D space.
-  // Offsets are relative to wherever the camera actually is when this runs
-  // (after the post-reveal cosmic warp has already moved it), not the
-  // scene's original setup position, so the dolly starts from the right place.
-  const camBaseY = camera.position.y;
-  const camBaseZ = camera.position.z;
-  tl.to(camera.position, { y: camBaseY + 0.9 * motionScale, z: camBaseZ - 1.3 * motionScale, duration: 0.5, ease: 'none' }, 0)
-    .to(camera.position, { y: camBaseY + 0.3 * motionScale, z: camBaseZ - 2.1 * motionScale, duration: 0.35, ease: 'none' }, 0.5)
-    .to(camera.position, { y: camBaseY - 0.1 * motionScale, z: camBaseZ - 0.5 * motionScale, duration: 0.15, ease: 'none' }, 0.85);
+  // ACT 2 — "The Moments" (0.30 -> 0.58): the orbit climbs a little more
+  // and swings back the other way; the flower rises a touch and keeps turning.
+  tl.to(modelGroup.rotation, { x: tiltTarget.x - 0.02 * motionScale, y: tiltTarget.y + 0.78 * motionScale, duration: 0.28, ease: 'none' }, 0.30)
+    .to(modelGroup.position, { y: baseY + 0.45 * motionScale, duration: 0.28, ease: 'none' }, 0.30)
+    .to(cameraOrbit, { azimuth: orbitStart.azimuth - 0.22 * motionScale, polar: orbitStart.polar + 0.22 * motionScale, duration: 0.28, ease: 'none' }, 0.30);
 
-  // Starfield drifts opposite the camera for parallax depth, and the tulip
-  // canvas (the flat decorative field of tulips) gently dims as we move
-  // into the narrative so the focus shifts to the story content.
+  // ACT 3 — "Forever" (0.58 -> 0.85): the camera continues its gentle
+  // climb to a high three-quarter angle (not a full top-down shot — that
+  // angle made any natural asymmetry in the scanned bloom read as
+  // off-center), and the flower begins to turn back toward a clean,
+  // centered resting rotation rather than spinning further away from it.
+  tl.to(modelGroup.rotation, { x: tiltTarget.x + 0.1 * motionScale, y: tiltTarget.y + 0.5 * motionScale, duration: 0.27, ease: 'none' }, 0.58)
+    .to(modelGroup.position, { y: baseY + 0.62 * motionScale, duration: 0.27, ease: 'none' }, 0.58)
+    .to(cameraOrbit, { azimuth: orbitStart.azimuth + 0.05 * motionScale, polar: orbitStart.polar + 0.62 * motionScale, duration: 0.27, ease: 'none' }, 0.58);
+
+  if (finaleGlowLight) {
+    tl.to(finaleGlowLight, { intensity: 1.1 * motionScale, duration: 0.27, ease: 'none' }, 0.58);
+  }
+
+  // ACT 4 — "The Proposal" (0.85 -> 1.0): everything settles — camera,
+  // rotation, and position all ease into their final, centered resting
+  // state at once, so the flower comes to rest dead-center in frame
+  // exactly as the page reaches the question. x stays at 0 throughout
+  // every act (never tweened away from it), so there's nothing to snap back.
+  tl.to(modelGroup.rotation, { x: tiltTarget.x + 0.05 * motionScale, y: tiltTarget.y + 0.3 * motionScale, duration: 0.15, ease: 'none' }, 0.85)
+    .to(modelGroup.position, { y: baseY + 0.72 * motionScale, duration: 0.15, ease: 'none' }, 0.85)
+    .to(cameraOrbit, { azimuth: 0, polar: orbitStart.polar + 0.68 * motionScale, duration: 0.15, ease: 'none' }, 0.85)
+    .to(modelGroup.scale, {
+      x: baseModelScale * (1 + 0.06 * motionScale),
+      y: baseModelScale * (1 + 0.06 * motionScale),
+      z: baseModelScale * (1 + 0.06 * motionScale),
+      duration: 0.15, ease: 'none'
+    }, 0.85);
+
+  if (finaleGlowLight) {
+    tl.to(finaleGlowLight, { intensity: 1.7 * motionScale, duration: 0.15, ease: 'none' }, 0.85);
+  }
+
+  // Focus rack: the page opens with the flower soft/out-of-focus, as if
+  // still emerging from the dark, and sharpens as the reader scrolls in —
+  // applied as a CSS blur on the 3D canvas (see applyFocusBlur) so it stays
+  // fully compatible with the canvas's transparent background. Resolves to
+  // fully sharp well before the proposal so the destination is never the
+  // blurriest moment.
+  tl.to(focusState, {
+    blurAmount: 0,
+    duration: 0.45,
+    ease: 'power2.out',
+    onUpdate: () => applyFocusBlur(focusState.blurAmount),
+  }, 0);
+
+  // Starfield and nebula drift opposite the camera for parallax depth, and
+  // the tulip canvas (the flat decorative field of tulips) gently dims as
+  // we move into the narrative so focus shifts to the story content.
   if (starParticles) {
     tl.to(starParticles.rotation, { y: `+=${0.6 * motionScale}`, x: `+=${0.15 * motionScale}`, duration: 1, ease: 'none' }, 0);
     tl.to(starParticles.position, { y: -0.8 * motionScale, duration: 1, ease: 'none' }, 0);
   }
+
+  // Mercury blobs get pulled toward the stem as scroll progresses
+  mercuryBlobs.forEach((blob) => {
+    tl.to(blob.userData, { scrollPull: 1 * motionScale, duration: 1, ease: 'power2.in' }, 0);
+  });
+  nebulaSprites.forEach((sprite, i) => {
+    tl.to(sprite.userData, { scrollOffsetY: -1.5 * motionScale, duration: 1, ease: 'none' }, 0);
+  });
 
   tl.to({}, {
     duration: 1,
@@ -762,6 +1182,57 @@ function setupCursorGlow() {
     cx = lerp(cx, gx, 0.08);
     cy = lerp(cy, gy, 0.08);
     cursorGlow.style.transform = `translate(${cx}px, ${cy}px) translate(-50%, -50%)`;
+  });
+}
+
+// Hover petal flex: raycasts from the cursor into the 3D scene each frame,
+// finds the intersection point on the flower surface, and updates the
+// shared hoverUniforms so the injected vertex shader can bend nearby
+// vertices outward, creating the illusion of per-petal hover response.
+const _raycaster = new THREE.Raycaster();
+const _ndcMouse = new THREE.Vector2();
+let _hoverFlexTween = null;
+
+function setupHoverPetalFlex() {
+  if (prefersReducedMotion || isCoarsePointer) return; // skip on mobile/touch
+
+  let wasHovering = false;
+
+  gsap.ticker.add(() => {
+    if (!modelGroup || !camera || mouseX < 0) return;
+
+    // Convert pixel mouse coords to NDC
+    _ndcMouse.set(
+      (mouseX / window.innerWidth) * 2 - 1,
+      -(mouseY / window.innerHeight) * 2 + 1
+    );
+
+    _raycaster.setFromCamera(_ndcMouse, camera);
+    const targets = [];
+    modelGroup.traverse((o) => { if (o.isMesh) targets.push(o); });
+    const hits = _raycaster.intersectObjects(targets, false);
+
+    if (hits.length > 0) {
+      // Update the world-space cursor position for the shader
+      hoverUniforms.uMouseWorld.value.copy(hits[0].point);
+      if (!wasHovering) {
+        wasHovering = true;
+        if (_hoverFlexTween) _hoverFlexTween.kill();
+        _hoverFlexTween = gsap.to(hoverUniforms.uFlexStrength, {
+          value: 1, duration: 0.25, ease: 'power2.out',
+        });
+      }
+    } else {
+      if (wasHovering) {
+        wasHovering = false;
+        if (_hoverFlexTween) _hoverFlexTween.kill();
+        _hoverFlexTween = gsap.to(hoverUniforms.uFlexStrength, {
+          value: 0, duration: 0.45, ease: 'power2.in',
+        });
+      }
+      // Move the cursor far away so no vertices are affected
+      hoverUniforms.uMouseWorld.value.set(9999, 9999, 9999);
+    }
   });
 }
 
@@ -946,6 +1417,109 @@ function handleResize() {
   }
 }
 
+// Recomputes the spherical orbit state from wherever the camera actually
+// is right now. Needed before switching on orbit-driven camera control,
+// since the landing/warp sequence moves the camera with plain position
+// tweens — without this resync, applyCameraOrbit's first frame would
+// snap the camera back to its pre-warp distance.
+function syncCameraOrbitFromPosition() {
+  const dy = camera.position.y - cameraOrbit.targetY;
+  const dz = camera.position.z;
+  const dx = camera.position.x;
+  const horizontalDist = Math.sqrt(dx * dx + dz * dz);
+  cameraOrbit.radius = Math.sqrt(dy * dy + horizontalDist * horizontalDist);
+  cameraOrbit.polar = Math.atan2(dy, horizontalDist);
+  cameraOrbit.azimuth = Math.atan2(dx, dz);
+}
+
+// Applies the depth-of-field focus rack as a CSS blur filter on the 3D
+// canvas. This is intentionally not a Three.js postprocessing pass — the
+// classic BokehShader hardcodes gl_FragColor.a = 1.0 which would have
+// made the canvas opaque, breaking all the CSS-layer compositing beneath it.
+// CSS filter blur preserves the canvas's existing alpha channel perfectly
+// and is GPU-accelerated on all modern browsers.
+// amount: 0 = tack sharp, 1 = maximum soft focus.
+function applyFocusBlur(amount) {
+  const px = Math.round(amount * 14);   // 0–14 px blur, feels like real lens pull
+  const brightness = 1 - amount * 0.18; // very slightly dimmer when out of focus,
+  // reinforcing the "deep in darkness" initial feel
+  if (threeCanvas) {
+    threeCanvas.style.filter = px > 0
+      ? `blur(${px}px) brightness(${brightness.toFixed(2)})`
+      : 'none';
+  }
+  if (tulipCanvas) {
+    tulipCanvas.style.filter = px > 0
+      ? `blur(${Math.round(px * 0.6)}px) brightness(${brightness.toFixed(2)})`
+      : 'none';
+  }
+}
+
+function applyCameraOrbit() {
+  const { radius, polar, azimuth, targetY } = cameraOrbit;
+  // Spherical-ish orbit around the flower: azimuth swings the camera
+  // sideways around the vertical axis, polar swings it up from level
+  // toward directly overhead.
+  const horizontalRadius = radius * Math.cos(polar);
+  camera.position.x = Math.sin(azimuth) * horizontalRadius;
+  camera.position.z = Math.cos(azimuth) * horizontalRadius;
+  camera.position.y = targetY + radius * Math.sin(polar);
+  camera.lookAt(0, targetY, 0);
+}
+
+function updateNebula(time) {
+  nebulaSprites.forEach((sprite) => {
+    const d = sprite.userData;
+    sprite.position.x = d.baseX + Math.sin(time * d.driftSpeed + d.driftPhase) * 1.2;
+    sprite.position.y = d.baseY + (d.scrollOffsetY || 0) + Math.cos(time * d.driftSpeed * 0.8 + d.driftPhase) * 0.8;
+  });
+}
+
+function updateEmberMotes(time) {
+  if (!emberMotes || !emberData) return;
+  const posAttr = emberMotes.geometry.attributes.position;
+  const { speeds, phases, basePositions } = emberData;
+  const count = speeds.length;
+  for (let i = 0; i < count; i++) {
+    const baseX = basePositions[i * 3];
+    const baseY = basePositions[i * 3 + 1];
+    const baseZ = basePositions[i * 3 + 2];
+    const t = time * speeds[i] + phases[i];
+    // gentle upward drift that loops, plus a soft horizontal sway
+    const riseRange = 10;
+    const y = baseY + ((t * 0.6) % riseRange) - riseRange / 2;
+    posAttr.setXYZ(i, baseX + Math.sin(t) * 0.4, y, baseZ + Math.cos(t * 0.7) * 0.3);
+  }
+  posAttr.needsUpdate = true;
+}
+
+function updateMercuryBlobs(time) {
+  mercuryBlobs.forEach((blob) => {
+    const d = blob.userData;
+    // Sine-wave scale pulse — different frequency per blob for organic feel
+    const pulse = 1.0 + Math.sin(time * d.morphSpeed + d.morphPhase) * 0.18
+                      + Math.sin(time * d.morphSpeed * 1.7 + d.morphPhase * 0.5) * 0.08;
+    blob.scale.setScalar(pulse);
+
+    // Magnetic pull toward the stem as scroll progresses
+    const pull = d.scrollPull;
+    const stemTarget = new THREE.Vector3(
+      d.basePos.x * (1 - pull) * 0.3,
+      d.basePos.y * (1 - pull * 0.6),
+      d.basePos.z * (1 - pull * 0.4) + pull * 1.5   // drift forward toward flower
+    );
+
+    // Gentle idle drift layered on top
+    const driftX = Math.sin(time * 0.22 + d.morphPhase) * 0.12;
+    const driftY = Math.cos(time * 0.17 + d.morphPhase * 0.7) * 0.08;
+
+    blob.position.x = lerp(blob.position.x, stemTarget.x + driftX, 0.02);
+    blob.position.y = lerp(blob.position.y, stemTarget.y + driftY, 0.02);
+    blob.position.z = lerp(blob.position.z, stemTarget.z, 0.015);
+  });
+}
+
+
 function animate() {
   requestAnimationFrame(animate);
   const delta = clock.getDelta();
@@ -955,8 +1529,13 @@ function animate() {
   renderFlowers(time);
 
   if (starParticles) starParticles.rotation.y += delta * 0.02;
+  updateNebula(time);
+  updateEmberMotes(time);
+  updateMercuryBlobs(time);
+  updateSilkRibbons(time);
   animateModel();
   updateParticles(delta);
+  if (orbitActive) applyCameraOrbit();
   renderer.render(scene, camera);
 }
 
@@ -1053,14 +1632,23 @@ async function init() {
   initFlowers();
   initScene();
   createStarfield();
+  createNebula();
+  createEmberMotes();
+  createMercuryBlobs();
+  createSilkRibbons();
   setupLights();
   await loadModel();
+
+  // Start fully blurred so the flower feels like it's emerging from the
+  // dark as the user begins scrolling. The scroll timeline unblurs it.
+  applyFocusBlur(1);
 
   document.addEventListener('mousemove', (e) => { mouseX = e.clientX; mouseY = e.clientY; });
   document.addEventListener('touchmove', (e) => { const t = e.touches[0]; mouseX = t.clientX; mouseY = t.clientY; }, { passive: true });
 
   handleNoButton();
   setupCursorGlow();
+  setupHoverPetalFlex();
   revealBtn.addEventListener('click', onReveal);
   window.addEventListener('resize', handleResize);
   animate();
