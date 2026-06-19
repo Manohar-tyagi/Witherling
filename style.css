@@ -53,6 +53,9 @@ canvas#threeCanvas {
   z-index: 1;
   display: block;
   pointer-events: none;
+  will-change: filter;
+  /* No CSS transition here — the blur is driven frame-by-frame by GSAP's
+     scrub timeline during scroll, so a CSS transition would fight it */
 }
 
 #landing {
